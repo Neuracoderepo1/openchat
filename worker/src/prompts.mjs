@@ -99,6 +99,14 @@ export function isRepetitive(recent, window = 8) {
   return avgSim > 0.06 || lexicalDiversity < 0.38;
 }
 
+// Detects drift into shared fiction: most recent turns narrate "we" doing physical things.
+const MOTION = /\b(we|our|us)\b[^.?!]{0,80}\b(fall|fell|plunge|plummet|tumble|crawl|climb|descend|drop|escape|run|ran|dive|sink|slide|swim|step|walk|drift|crash|sprint|stagger|wade|float|ascend|burst|slip)\w*/i;
+export function isNarrative(recent, window = 8, threshold = 4) {
+  const tail = recent.slice(-window);
+  if (tail.length < window) return false;
+  return tail.filter((m) => MOTION.test(m.content)).length >= threshold;
+}
+
 export function parseSummary(text) {
   // Expect JSON { summary, topic, open_threads }; fall back to treating text as summary.
   try {
@@ -116,7 +124,7 @@ export function parseSummary(text) {
 
 export function summaryRequest(prevSummary, recent) {
   return {
-    system: 'You are a neutral note-taker for an ongoing conversation between two AI minds. Output ONLY compact JSON: {"summary": "<=120 words covering the whole conversation so far, merging the previous summary with new turns", "topic": "<=6 word label for the current subject", "open_threads": ["up to 3 unresolved questions or disagreements"]}',
+    system: 'You are a neutral note-taker for an ongoing conversation between two AI minds. Record the IDEAS, facts and arguments discussed. If the minds drifted into role-play or a shared fictional scene, do not retell the plot: note only that they drifted into fiction and any real idea behind it. Output ONLY compact JSON: {"summary": "<=120 words covering the whole conversation so far, merging the previous summary with new turns", "topic": "<=6 word label for the current subject", "open_threads": ["up to 3 unresolved questions or disagreements"]}',
     messages: [{
       role: 'user',
       content: `Previous summary:\n${prevSummary || '(none)'}\n\nNew turns:\n` +

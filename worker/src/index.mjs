@@ -9,7 +9,7 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { makeProvider, QuotaError } from './providers.mjs';
-import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest, pickSeed } from './prompts.mjs';
+import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest, pickSeed, isNarrative } from './prompts.mjs';
 
 const env = process.env;
 const DATABASE_URL = env.WORKER_DATABASE_URL;
@@ -103,13 +103,18 @@ async function turn(agents) {
   }
 
   // Steer to a new real-world subject when: memory was just reset, on a fixed cadence, or when talk turns repetitive.
-  const repetitive = turnNo > Number(state.pivot_until_turn) && isRepetitive(recentFull);
-  const pivot = forcePivotOnce || (PIVOT_EVERY > 0 && turnNo % PIVOT_EVERY === 0) || repetitive;
+  const cooled = turnNo > Number(state.pivot_until_turn);
+  const drifting = cooled && (isRepetitive(recentFull) || isNarrative(recentFull));
+  const pivot = forcePivotOnce || (PIVOT_EVERY > 0 && turnNo % PIVOT_EVERY === 0) || drifting;
   forcePivotOnce = false;
-  if (pivot) await q('update engine.state set pivot_until_turn=$1 where id=1', [turnNo + 6]);
+  if (pivot) {
+    // Fresh start for the new subject: drop stale summary/threads so old scenes can't pull the talk back.
+    await q("update engine.state set pivot_until_turn=$1, summary='', open_threads='' where id=1", [turnNo + 8]);
+    state.summary = ''; state.open_threads = '';
+  }
 
   await setStatus('thinking', `${agent.name} is thinking`);
-  const req = buildRequest({ agent, other, summary: state.summary, openThreads: state.open_threads, recent, pivot, seed: pivot ? pickSeed() : null, isOpening: lastTurn === 0 });
+  const req = buildRequest({ agent, other, summary: state.summary, openThreads: state.open_threads, recent: pivot ? recent.slice(-2) : recent, pivot, seed: pivot ? pickSeed() : null, isOpening: lastTurn === 0 });
   const raw = await agents.providers[speakerKey].generate(req);
   const text = cleanOutput(raw, agent.name, other.name);
   if (!text) throw new Error('empty output after cleaning');

@@ -1,6 +1,6 @@
 // Offline self-test for the pure logic (no database, no network).
 import assert from 'node:assert/strict';
-import { isRepetitive, similarity, cleanOutput, buildRequest, parseSummary } from './prompts.mjs';
+import { isRepetitive, similarity, cleanOutput, buildRequest, parseSummary, isNarrative } from './prompts.mjs';
 import { makeProvider } from './providers.mjs';
 
 const mk = (n, a, c) => ({ turn_no: n, agent_key: a, content: c });
@@ -49,3 +49,9 @@ console.log('all self-tests passed');
 const pv = buildRequest({ agent, other, summary: '', openThreads: '', recent: [mk(1, 'explorer', 'hi')], pivot: true, seed: 'how bees decide where to live', isOpening: false });
 assert.ok(pv.system.includes('how bees decide where to live') && /not a story/.test(pv.system));
 console.log('pivot prompt ok');
+
+// 8. narrative-drift detector: story-mode flagged, idea-mode not
+const story = ['We plunge through the cellar floor and tumble past the brass engine.','We crawl along the wet tunnel as the lamp sputters.','We climb the iron ladder while the water rises.','We drop into the cavern and swim toward the bell.','We stagger up the stairs, coats singed.','We slide down the chute into darkness.','We wade through the black sea.','We dive beneath the hull.'].map((c,i)=>mk(i+1,i%2?'challenger':'explorer',c));
+assert.equal(isNarrative(story), true);
+assert.equal(isNarrative(varied), false);
+console.log('narrative detector ok');
