@@ -108,8 +108,10 @@ const mock = ({ label }) => {
 
 export function makeProvider(agent) {
   const env = process.env;
-  const p = agent.provider;
-  const model = agent.model || env[`${agent.key.toUpperCase()}_MODEL`];
+  const K = agent.key.toUpperCase();
+  // Environment overrides take precedence over the agents table (lets ops change models without SQL).
+  const p = env[`${K}_PROVIDER`] || agent.provider;
+  const model = env[`${K}_MODEL`] || agent.model;
   if (p === 'mock') return mock({ label: agent.key });
   if (p === 'gemini') {
     if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY missing');
