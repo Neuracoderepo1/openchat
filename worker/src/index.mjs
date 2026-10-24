@@ -9,7 +9,7 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { makeProvider, QuotaError } from './providers.mjs';
-import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest } from './prompts.mjs';
+import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest, pickSeed } from './prompts.mjs';
 
 const env = process.env;
 const DATABASE_URL = env.WORKER_DATABASE_URL;
@@ -19,6 +19,8 @@ const OWNER = `${process.env.RENDER_INSTANCE_ID || 'local'}-${randomUUID().slice
 const MIN_TURN_MS = Number(env.MIN_TURN_SECONDS ?? 3) * 1000;   // pacing; keeps free tiers alive longer
 const CONTEXT_TURNS = Number(env.CONTEXT_TURNS ?? 14);
 const SUMMARY_EVERY = Number(env.SUMMARY_EVERY ?? 20);
+const PIVOT_EVERY = Number(env.PIVOT_EVERY ?? 40);                // forced topic change cadence (0 = off)
+let forcePivotOnce = false;                                        // set when memory is reset at boot
 const LEASE_MS = 90_000;
 const MAX_BACKOFF_MS = Number(env.MAX_BACKOFF_MINUTES ?? 10) * 60_000;
 const DAILY_TURN_CAP = Number(env.DAILY_TURN_CAP ?? 0);          // 0 = unlimited; set to cap spend/usage
@@ -100,12 +102,14 @@ async function turn(agents) {
     }
   }
 
-  const pivot = turnNo > Number(state.pivot_until_turn) && isRepetitive(recentFull) ;
-  if (pivot) await q('update engine.state set pivot_until_turn=$1 where id=1', [turnNo + 10]);
-  const stillPivoting = pivot || turnNo <= Number(state.pivot_until_turn);
+  // Steer to a new real-world subject when: memory was just reset, on a fixed cadence, or when talk turns repetitive.
+  const repetitive = turnNo > Number(state.pivot_until_turn) && isRepetitive(recentFull);
+  const pivot = forcePivotOnce || (PIVOT_EVERY > 0 && turnNo % PIVOT_EVERY === 0) || repetitive;
+  forcePivotOnce = false;
+  if (pivot) await q('update engine.state set pivot_until_turn=$1 where id=1', [turnNo + 6]);
 
   await setStatus('thinking', `${agent.name} is thinking`);
-  const req = buildRequest({ agent, other, summary: state.summary, openThreads: state.open_threads, recent, pivot: stillPivoting && pivot, isOpening: lastTurn === 0 });
+  const req = buildRequest({ agent, other, summary: state.summary, openThreads: state.open_threads, recent, pivot, seed: pivot ? pickSeed() : null, isOpening: lastTurn === 0 });
   const raw = await agents.providers[speakerKey].generate(req);
   const text = cleanOutput(raw, agent.name, other.name);
   if (!text) throw new Error('empty output after cleaning');
@@ -144,6 +148,12 @@ if (env.RENDER_EXTERNAL_URL) {
 
 async function main() {
   log('worker starting as', OWNER);
+  if (env.RESET_MEMORY === '1') {
+    // One-off: discard the rolling summary/open threads (e.g. after the conversation drifted into fiction).
+    await q("update engine.state set summary='', open_threads='', pivot_until_turn=0 where id=1");
+    forcePivotOnce = true;
+    log('memory reset requested: summary cleared, next turn pivots to a new subject');
+  }
   let agents = await loadAgents();
   let failures = 0;
   let quotaStreak = 0;

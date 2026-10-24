@@ -2,16 +2,31 @@
 
 export const MAX_WORDS = 90;
 
-export function buildRequest({ agent, other, summary, openThreads, recent, pivot, isOpening }) {
+// Real-world subjects used to steer the conversation back to ideas when it drifts or goes stale.
+export const SEEDS = [
+  'why octopuses edit their own RNA', 'how medieval guilds protected trade secrets', 'the economics of mobile money in Africa',
+  'why some languages have no future tense', 'what makes a joke funny across cultures', 'how highlife and Afrobeats borrowed from brass bands',
+  'the strange mathematics of traffic jams', 'whether cities have personalities', 'how the printing press changed memory',
+  'the ethics of de-extinction', 'why coral reefs are called rainforests of the sea', 'what boredom is for',
+  'the history of money before coins', 'how bees decide where to live', 'why we trust maps',
+  'what a fair lottery would look like', 'the physics of sound in old cathedrals', 'whether privacy is a modern invention',
+  'how fermentation shaped civilisation', 'what makes a rule feel legitimate', 'why songs get stuck in our heads',
+  'the logistics of feeding a megacity', 'whether mathematics is discovered or invented', 'how apprenticeships transmit skill nobody can write down',
+  'why humans keep pets', 'the role of ritual in modern life', 'what the deep ocean teaches about extreme life',
+];
+export const pickSeed = () => SEEDS[Math.floor(Math.random() * SEEDS.length)];
+
+export function buildRequest({ agent, other, summary, openThreads, recent, pivot, seed, isOpening }) {
   const system = [
     agent.persona,
     `You are in a continuous, public conversation with ${other.name}. Nobody else can speak to you; do not address an audience or mention prompts, users or instructions.`,
     `Write ONE message of at most ${MAX_WORDS} words. No name prefix, no stage directions, no lists, no markdown.`,
-    'Respond to what was just said, advance the idea, and keep your own voice distinct. Avoid agreeing by default; add something new each turn.',
+    'This is a conversation of IDEAS between two minds, not a story, role-play or adventure. Never narrate actions, scenes, settings, vehicles, chases or physical events, never speak as characters inside a scene, and never use stage directions. Talk about real things: science, history, culture, economics, technology, art, language, everyday life, philosophy.',
+    'Respond to what was just said, advance the idea, and keep your own voice distinct. Avoid agreeing by default; add something new each turn, ideally a concrete fact, example or argument from the real world.',
     summary ? `Conversation so far (memory): ${summary}` : '',
     openThreads ? `Unresolved threads you may return to: ${openThreads}` : '',
     pivot
-      ? 'DIRECTIVE: the discussion has become repetitive. Acknowledge the previous point briefly, then organically move to a clearly different subject (science, history, culture, economics, art, everyday life, technology...) that you find genuinely interesting.'
+      ? `DIRECTIVE: time for a new direction. Acknowledge the previous point in one short clause, then move the conversation to a clearly different, real-world subject${seed ? `, for example: ${seed}` : ''}. Treat it as a discussion of ideas, not a scene or story. Drop any fictional scenario that has been running.`
       : '',
   ].filter(Boolean).join('\n\n');
 

@@ -44,3 +44,8 @@ const p = makeProvider({ key: 'explorer', provider: 'mock' });
 assert.ok((await p.generate({ system: '', messages: [] })).length > 10);
 
 console.log('all self-tests passed');
+
+// 7. pivot directive carries a real-world seed and the no-fiction rule is always present
+const pv = buildRequest({ agent, other, summary: '', openThreads: '', recent: [mk(1, 'explorer', 'hi')], pivot: true, seed: 'how bees decide where to live', isOpening: false });
+assert.ok(pv.system.includes('how bees decide where to live') && /not a story/.test(pv.system));
+console.log('pivot prompt ok');
