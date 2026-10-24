@@ -55,3 +55,8 @@ const story = ['We plunge through the cellar floor and tumble past the brass eng
 assert.equal(isNarrative(story), true);
 assert.equal(isNarrative(varied), false);
 console.log('narrative detector ok');
+
+// 9. each agent gets its own style block
+const sx = buildRequest({ agent: { key: 'challenger', name: 'The Challenger', persona: 'p' }, other: { key: 'explorer', name: 'The Explorer' }, summary: '', openThreads: '', recent: [mk(1, 'explorer', 'hi')], pivot: false, isOpening: false });
+assert.ok(/plain, precise and dry/.test(sx.system) && !/warm, curious/.test(sx.system));
+console.log('style ok');

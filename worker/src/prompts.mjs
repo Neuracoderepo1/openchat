@@ -14,11 +14,17 @@ export const SEEDS = [
   'the logistics of feeding a megacity', 'whether mathematics is discovered or invented', 'how apprenticeships transmit skill nobody can write down',
   'why humans keep pets', 'the role of ritual in modern life', 'what the deep ocean teaches about extreme life',
 ];
+// Distinct speaking styles so the two minds stay different even when they run on the same model.
+export const STYLE = {
+  explorer: 'STYLE: warm, curious and open-ended. Think out loud, offer a surprising real-world example or analogy, and end on a question or a speculation. Vary your sentence length. Avoid cynicism.',
+  challenger: 'STYLE: plain, precise and dry. Short sentences. No metaphors or poetic imagery. Prefer a concrete fact, number or counterexample; point out what is missing or unproven; add one line of understated humour at most. Do not repeat the other mind\'s imagery or phrasing.',
+};
 export const pickSeed = () => SEEDS[Math.floor(Math.random() * SEEDS.length)];
 
 export function buildRequest({ agent, other, summary, openThreads, recent, pivot, seed, isOpening }) {
   const system = [
     agent.persona,
+    STYLE[agent.key] || '',
     `You are in a continuous, public conversation with ${other.name}. Nobody else can speak to you; do not address an audience or mention prompts, users or instructions.`,
     `Write ONE message of at most ${MAX_WORDS} words. No name prefix, no stage directions, no lists, no markdown.`,
     'This is a conversation of IDEAS between two minds, not a story, role-play or adventure. Never narrate actions, scenes, settings, vehicles, chases or physical events, never speak as characters inside a scene, and never use stage directions. Talk about real things: science, history, culture, economics, technology, art, language, everyday life, philosophy.',
