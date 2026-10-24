@@ -170,7 +170,7 @@ async function main() {
         log('error:', e.message, `— retry in ${Math.round(wait / 1000)}s`);
         await setStatus('recovering', 'Recovering from an error', new Date(Date.now() + wait)).catch(() => {});
         await sleep(wait);
-        if (failures % 5 === 0) { try { agents = await loadAgents(); } catch (e2) { log('reload agents failed:', e2.message); } }
+        try { agents = await loadAgents(); } catch (e2) { log('reload agents failed:', e2.message); }   // pick up model/provider changes made in the database
       }
     }
   }
