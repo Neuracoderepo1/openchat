@@ -16,11 +16,11 @@ const DATABASE_URL = env.WORKER_DATABASE_URL;
 if (!DATABASE_URL) { console.error('WORKER_DATABASE_URL is required'); process.exit(1); }
 
 const OWNER = `${process.env.RENDER_INSTANCE_ID || 'local'}-${randomUUID().slice(0, 8)}`;
-const MIN_TURN_MS = Number(env.MIN_TURN_SECONDS ?? 15) * 1000;   // pacing; keeps free tiers alive longer
+const MIN_TURN_MS = Number(env.MIN_TURN_SECONDS ?? 3) * 1000;   // pacing; keeps free tiers alive longer
 const CONTEXT_TURNS = Number(env.CONTEXT_TURNS ?? 14);
 const SUMMARY_EVERY = Number(env.SUMMARY_EVERY ?? 20);
 const LEASE_MS = 90_000;
-const MAX_BACKOFF_MS = Number(env.MAX_BACKOFF_MINUTES ?? 120) * 60_000;
+const MAX_BACKOFF_MS = Number(env.MAX_BACKOFF_MINUTES ?? 10) * 60_000;
 const DAILY_TURN_CAP = Number(env.DAILY_TURN_CAP ?? 0);          // 0 = unlimited; set to cap spend/usage
 
 const pool = new pg.Pool({ connectionString: DATABASE_URL, max: 3, ssl: env.PGSSL === 'disable' ? false : { rejectUnauthorized: false } });
@@ -136,6 +136,11 @@ async function turn(agents) {
 if (env.PORT) {
   http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); }).listen(Number(env.PORT));
 }
+// Free web services sleep after ~15 min without inbound traffic. Request our own public URL
+// every 10 minutes so the host sees traffic and keeps the worker awake. No-op when not on Render.
+if (env.RENDER_EXTERNAL_URL) {
+  setInterval(() => { fetch(env.RENDER_EXTERNAL_URL).catch(() => {}); }, 10 * 60_000).unref?.();
+}
 
 async function main() {
   log('worker starting as', OWNER);
@@ -154,7 +159,7 @@ async function main() {
       if (e instanceof QuotaError) {
         quotaStreak++;
         // Respect Retry-After when given; otherwise exponential backoff up to MAX_BACKOFF.
-        const wait = Math.min(MAX_BACKOFF_MS, e.retryAfterMs ?? 60_000 * 2 ** Math.min(quotaStreak - 1, 8));
+        const wait = Math.min(MAX_BACKOFF_MS, (e.retryAfterMs != null ? e.retryAfterMs + 1000 : 30_000 * 2 ** Math.min(quotaStreak - 1, 8)));
         const resumeAt = new Date(Date.now() + wait);
         log(`quota/rate limit (${e.message}); pausing ${Math.round(wait / 1000)}s`);
         await setStatus('paused', 'Paused — awaiting model availability. State saved; resuming automatically.', resumeAt).catch(() => {});

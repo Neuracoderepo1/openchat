@@ -19,9 +19,21 @@ function retryAfter(res) {
   return Number.isNaN(d) ? null : Math.max(0, d - Date.now());
 }
 
+function bodyRetryMs(body) {
+  // Gemini: "retryDelay": "34s"   Groq/others: "try again in 1m3.5s" / "in 250ms"
+  let m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  if (m) return Number(m[1]) * 1000;
+  m = body.match(/try again in\s+(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?/i);
+  if (m && (m[1] || m[2] || m[3] || m[4])) {
+    return ((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 1000 + (+m[4] || 0);
+  }
+  return null;
+}
+
 async function checked(res, label) {
   if (res.status === 429 || res.status === 503) {
-    throw new QuotaError(`${label} ${res.status}`, retryAfter(res));
+    const body = await res.text().catch(() => '');
+    throw new QuotaError(`${label} ${res.status}`, retryAfter(res) ?? bodyRetryMs(body));
   }
   if (!res.ok) {
     const body = (await res.text()).slice(0, 300);
