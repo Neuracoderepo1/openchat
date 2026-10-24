@@ -1,0 +1,111 @@
+// Prompt construction and repetition detection. Pure functions (unit-testable).
+
+export const MAX_WORDS = 90;
+
+export function buildRequest({ agent, other, summary, openThreads, recent, pivot, isOpening }) {
+  const system = [
+    agent.persona,
+    `You are in a continuous, public conversation with ${other.name}. Nobody else can speak to you; do not address an audience or mention prompts, users or instructions.`,
+    `Write ONE message of at most ${MAX_WORDS} words. No name prefix, no stage directions, no lists, no markdown.`,
+    'Respond to what was just said, advance the idea, and keep your own voice distinct. Avoid agreeing by default; add something new each turn.',
+    summary ? `Conversation so far (memory): ${summary}` : '',
+    openThreads ? `Unresolved threads you may return to: ${openThreads}` : '',
+    pivot
+      ? 'DIRECTIVE: the discussion has become repetitive. Acknowledge the previous point briefly, then organically move to a clearly different subject (science, history, culture, economics, art, everyday life, technology...) that you find genuinely interesting.'
+      : '',
+  ].filter(Boolean).join('\n\n');
+
+  // Map the transcript into alternating chat turns from this agent's point of view.
+  const messages = recent.map((m) => ({
+    role: m.agent_key === agent.key ? 'assistant' : 'user',
+    content: m.content,
+  }));
+  if (isOpening || messages.length === 0) {
+    messages.push({ role: 'user', content: 'Begin the conversation with a surprising question or observation of your choice.' });
+  } else if (messages[messages.length - 1].role === 'assistant') {
+    messages.push({ role: 'user', content: '(continue)' });
+  }
+  return { system, messages: mergeAdjacent(messages) };
+}
+
+function mergeAdjacent(msgs) {
+  const out = [];
+  for (const m of msgs) {
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) last.content += '\n' + m.content;
+    else out.push({ ...m });
+  }
+  // Most providers require the first message to be from the user.
+  if (out.length && out[0].role !== 'user') out.unshift({ role: 'user', content: '(conversation so far)' });
+  return out;
+}
+
+export function cleanOutput(text, agentName, otherName) {
+  let t = text.trim();
+  for (const n of [agentName, otherName, 'THE EXPLORER', 'THE CHALLENGER', 'Explorer', 'Challenger']) {
+    t = t.replace(new RegExp(`^[*_]*${n}[*_]*\\s*[:—-]\\s*[*_]*`, 'i'), '');
+  }
+  t = t.replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim().replace(/^["“]+|["”]+$/g, '').trim();
+  const words = t.split(' ');
+  if (words.length > MAX_WORDS + 30) {
+    t = words.slice(0, MAX_WORDS + 30).join(' ');
+    const cut = Math.max(t.lastIndexOf('. '), t.lastIndexOf('? '), t.lastIndexOf('! '));
+    if (cut > t.length * 0.5) t = t.slice(0, cut + 1);
+  }
+  return t.slice(0, 1900);
+}
+
+// --- Repetition detection: word-trigram Jaccard similarity over recent turns ---
+function trigrams(s) {
+  const w = s.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const set = new Set();
+  for (let i = 0; i + 2 < w.length; i++) set.add(w.slice(i, i + 3).join(' '));
+  return set;
+}
+export function similarity(a, b) {
+  const A = trigrams(a), B = trigrams(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// Returns true if the last `window` messages are too similar to each other
+// or share a narrow vocabulary (the "agreeing in circles" failure mode).
+export function isRepetitive(recent, window = 8) {
+  const tail = recent.slice(-window).map((m) => m.content);
+  if (tail.length < window) return false;
+  let pairs = 0, total = 0;
+  for (let i = 0; i < tail.length; i++)
+    for (let j = i + 1; j < tail.length; j++) { total += similarity(tail[i], tail[j]); pairs++; }
+  const avgSim = total / pairs;
+  const words = tail.join(' ').toLowerCase().match(/[a-z]{5,}/g) ?? [];
+  const lexicalDiversity = new Set(words).size / Math.max(1, words.length);
+  return avgSim > 0.06 || lexicalDiversity < 0.38;
+}
+
+export function parseSummary(text) {
+  // Expect JSON { summary, topic, open_threads }; fall back to treating text as summary.
+  try {
+    const m = text.match(/\{[\s\S]*\}/);
+    const j = JSON.parse(m ? m[0] : text);
+    return {
+      summary: String(j.summary ?? '').slice(0, 1500),
+      topic: String(j.topic ?? '').slice(0, 80),
+      openThreads: Array.isArray(j.open_threads) ? j.open_threads.join('; ').slice(0, 500) : String(j.open_threads ?? '').slice(0, 500),
+    };
+  } catch {
+    return { summary: text.slice(0, 1500), topic: '', openThreads: '' };
+  }
+}
+
+export function summaryRequest(prevSummary, recent) {
+  return {
+    system: 'You are a neutral note-taker for an ongoing conversation between two AI minds. Output ONLY compact JSON: {"summary": "<=120 words covering the whole conversation so far, merging the previous summary with new turns", "topic": "<=6 word label for the current subject", "open_threads": ["up to 3 unresolved questions or disagreements"]}',
+    messages: [{
+      role: 'user',
+      content: `Previous summary:\n${prevSummary || '(none)'}\n\nNew turns:\n` +
+        recent.map((m) => `${m.agent_key}: ${m.content}`).join('\n'),
+    }],
+  };
+}
