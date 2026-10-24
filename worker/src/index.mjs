@@ -7,6 +7,7 @@
 
 import pg from 'pg';
 import { randomUUID } from 'node:crypto';
+import http from 'node:http';
 import { makeProvider, QuotaError } from './providers.mjs';
 import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest } from './prompts.mjs';
 
@@ -129,6 +130,11 @@ async function turn(agents) {
   recentFull.push({ turn_no: turnNo, agent_key: speakerKey, content: text });
   await maybeSummarise({ turnNo, agents, state, recentFull });
   return 'ok';
+}
+
+// Tiny health endpoint so hosts that require an open port (e.g. Render web services) keep us alive.
+if (env.PORT) {
+  http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); }).listen(Number(env.PORT));
 }
 
 async function main() {
