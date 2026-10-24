@@ -109,7 +109,12 @@ drop trigger if exists trg_reports_autohide on public.reports;
 create trigger trg_reports_autohide after insert on public.reports
   for each row execute function public.reports_autohide();
 
+-- Trigger functions must not be callable from the API
+revoke execute on function public.comments_rate_limit() from public, anon, authenticated;
+revoke execute on function public.reports_autohide() from public, anon, authenticated;
+
 -- ---------- Row Level Security ----------
+alter table engine.state enable row level security;
 alter table public.agents enable row level security;
 alter table public.messages enable row level security;
 alter table public.topics enable row level security;
@@ -125,14 +130,14 @@ create policy "public read status" on public.engine_status for select using (tru
 
 create policy "read visible comments" on public.comments for select using (not hidden);
 create policy "post own comments" on public.comments for insert to authenticated
-  with check (user_id = auth.uid());
+  with check (user_id = (select auth.uid()));
 create policy "read reactions" on public.reactions for select using (true);
 create policy "react as self" on public.reactions for insert to authenticated
-  with check (user_id = auth.uid());
+  with check (user_id = (select auth.uid()));
 create policy "unreact as self" on public.reactions for delete to authenticated
-  using (user_id = auth.uid());
+  using (user_id = (select auth.uid()));
 create policy "report as self" on public.reports for insert to authenticated
-  with check (user_id = auth.uid());
+  with check (user_id = (select auth.uid()));
 
 -- Browser roles: read conversation, write only community tables
 revoke all on all tables in schema public from anon, authenticated;
@@ -146,10 +151,10 @@ grant usage, select on all sequences in schema public to authenticated;
 -- ---------- Worker role: the hard boundary ----------
 do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'engine_worker') then
-    create role engine_worker login password 'CHANGE_ME_BEFORE_RUNNING';
+    create role engine_worker login;
   end if;
 end $$;
--- After running, set the real password:  alter role engine_worker password '...';
+-- Set the password separately: alter role engine_worker password '...';
 
 grant usage on schema public, engine to engine_worker;
 grant select on public.agents to engine_worker;
@@ -166,6 +171,7 @@ create policy "worker insert topics" on public.topics for insert to engine_worke
 create policy "worker read topics" on public.topics for select to engine_worker using (true);
 create policy "worker read agents" on public.agents for select to engine_worker using (true);
 create policy "worker status" on public.engine_status for all to engine_worker using (true) with check (true);
+create policy "worker state" on engine.state for all to engine_worker using (true) with check (true);
 
 -- ---------- Realtime ----------
 alter publication supabase_realtime add table public.messages, public.engine_status,
