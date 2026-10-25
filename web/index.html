@@ -166,14 +166,21 @@ input{border-bottom:1px solid var(--line);padding:4px 0;margin-bottom:6px;font-s
     await loadComments();
   }
 
+  // Several loads can overlap (posting a comment, a realtime event, a like). Each load builds the list
+  // off-screen and swaps it in once; a newer load makes older ones discard their result, so a slow
+  // earlier load can never clear the list and then append a second copy of every comment.
+  let loadSeq = 0;
   async function loadComments() {
     if (selected == null) return;
+    const seq = ++loadSeq;
     const { data: cs, error } = await sb.from('comments').select('id,parent_id,display_name,body,created_at,user_id').eq('exchange_no', selected).order('created_at');
-    const box = $('comments'); box.textContent = '';
-    if (error) { box.append(el('div', 'empty', 'Could not load comments.')); return; }
-    if (!cs.length) { box.append(el('div', 'empty', 'No observations yet — be the first.')); return; }
+    if (seq !== loadSeq) return;
+    const box = $('comments');
+    if (error) { box.replaceChildren(el('div', 'empty', 'Could not load comments.')); return; }
+    if (!cs.length) { box.replaceChildren(el('div', 'empty', 'No observations yet — be the first.')); return; }
     const ids = cs.map(c => c.id);
     const { data: rx } = await sb.from('reactions').select('comment_id,user_id').in('comment_id', ids);
+    if (seq !== loadSeq) return;
     const likes = {}, mine = new Set();
     (rx || []).forEach(r => { likes[r.comment_id] = (likes[r.comment_id] || 0) + 1; if (r.user_id === uid) mine.add(r.comment_id); });
     const render = (c, isReply) => {
@@ -187,8 +194,10 @@ input{border-bottom:1px solid var(--line);padding:4px 0;margin-bottom:6px;font-s
       d.append(top, el('p', null, c.body), row);
       return d;
     };
+    const frag = document.createDocumentFragment();
     const top = cs.filter(c => !c.parent_id);
-    top.forEach(c => { box.appendChild(render(c, false)); cs.filter(r => r.parent_id === c.id).forEach(r => box.appendChild(render(r, true))); });
+    top.forEach(c => { frag.appendChild(render(c, false)); cs.filter(r => r.parent_id === c.id).forEach(r => frag.appendChild(render(r, true))); });
+    box.replaceChildren(frag);
   }
   $('replyto').onclick = () => { replyTo = null; $('replyto').hidden = true; };
 
