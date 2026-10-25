@@ -58,7 +58,7 @@ const gemini = ({ model, apiKey }) => ({
           role: m.role === 'assistant' ? 'model' : 'user',
           parts: [{ text: m.content }],
         })),
-        generationConfig: { temperature: 1.0, maxOutputTokens: 300 },
+        generationConfig: { temperature: 1.0, maxOutputTokens: /gemma/i.test(model) ? 1800 : 300 },   // Gemma spends tokens on hidden reasoning first
       }),
     });
     const j = await checked(res, 'gemini');
@@ -134,7 +134,7 @@ export function makeProvider(agent) {
             return out;
           } catch (e) {
             const quota = e instanceof QuotaError;
-            if (!quota && !/\b(400|403|404)\b/.test(String(e.message))) throw e;
+            if (!quota && !/\b(400|403|404)\b|empty text/.test(String(e.message))) throw e;
             const holdMs = quota ? Math.max(e.retryAfterMs ?? 0, 10 * 60_000) : 30 * 60_000;
             skipPrimaryUntil = Date.now() + holdMs;
             console.log(`${new Date().toISOString()} model ${model} ${quota ? 'out of quota' : 'rejected'} (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using ${fbModel} for ${Math.round(holdMs / 60000)} min`);
