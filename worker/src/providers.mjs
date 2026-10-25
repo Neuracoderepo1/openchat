@@ -118,19 +118,21 @@ export function makeProvider(agent) {
     const primary = gemini({ model, apiKey: env.GEMINI_API_KEY });
     const fbModel = env[`${K}_FALLBACK_MODEL`];
     if (!fbModel || fbModel === model) return primary;
-    // Model fallback: if the primary model is rejected (not a quota error), use the fallback and
-    // avoid retrying the primary for 30 minutes. Quota errors still propagate so the engine pauses.
+    // Model fallback: if the primary model is rejected or out of quota, use the fallback model
+    // (a separate model has its own free quota). The failing model is skipped for a while.
+    // Only when BOTH are unavailable does a QuotaError propagate, so the engine pauses.
     const fallback = gemini({ model: fbModel, apiKey: env.GEMINI_API_KEY });
-    let badUntil = 0;
+    let skipPrimaryUntil = 0;
     return {
       async generate(req) {
-        if (Date.now() >= badUntil) {
+        if (Date.now() >= skipPrimaryUntil) {
           try { return await primary.generate(req); }
           catch (e) {
-            if (e instanceof QuotaError) throw e;
-            if (!/\b(400|403|404)\b/.test(String(e.message))) throw e;
-            badUntil = Date.now() + 30 * 60_000;
-            console.log(`${new Date().toISOString()} model ${model} rejected (${String(e.message).slice(0, 80).replace(/\s+/g, ' ')}); using ${fbModel} for 30 min`);
+            const quota = e instanceof QuotaError;
+            if (!quota && !/\b(400|403|404)\b/.test(String(e.message))) throw e;
+            const holdMs = quota ? Math.max(e.retryAfterMs ?? 0, 10 * 60_000) : 30 * 60_000;
+            skipPrimaryUntil = Date.now() + holdMs;
+            console.log(`${new Date().toISOString()} model ${model} ${quota ? 'out of quota' : 'rejected'} (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using ${fbModel} for ${Math.round(holdMs / 60000)} min`);
           }
         }
         return fallback.generate(req);
