@@ -16,9 +16,9 @@ function retryAfter(res) {
   const h = res.headers.get('retry-after');
   if (!h) return null;
   const n = Number(h);
-  if (!Number.isNaN(n)) return n * 1000;
+  if (h.trim() !== '' && Number.isFinite(n)) return n >= 0 ? Math.min(n, 86_400) * 1000 : null;   // negative/absurd values are ignored/clamped
   const d = Date.parse(h);
-  return Number.isNaN(d) ? null : Math.max(0, d - Date.now());
+  return Number.isNaN(d) ? null : Math.min(86_400_000, Math.max(0, d - Date.now()));
 }
 
 function bodyRetryMs(body) {
@@ -46,12 +46,16 @@ async function checked(res, label) {
   return res.json();
 }
 
+const PROVIDER_TIMEOUT_MS = () => Number(process.env.PROVIDER_TIMEOUT_SECONDS ?? 60) * 1000;
+const fetchSignal = (opts) => AbortSignal.any([AbortSignal.timeout(PROVIDER_TIMEOUT_MS()), ...(opts?.signal ? [opts.signal] : [])]);
+
 const gemini = ({ model, apiKey }) => ({
-  async generate({ system, messages }) {
+  async generate({ system, messages }, opts) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+      signal: fetchSignal(opts),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: messages.map((m) => ({
@@ -70,10 +74,11 @@ const gemini = ({ model, apiKey }) => ({
 
 // Works with any OpenAI-compatible endpoint (Groq, OpenRouter, Together, local vLLM/Ollama...)
 const openaiCompat = ({ model, apiKey, baseUrl }) => ({
-  async generate({ system, messages }) {
+  async generate({ system, messages }, opts) {
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      signal: fetchSignal(opts),
       body: JSON.stringify({
         model,
         temperature: 1.0,
@@ -126,10 +131,10 @@ export function makeProvider(agent) {
     const fallback = gemini({ model: fbModel, apiKey: env.GEMINI_API_KEY });
     let skipPrimaryUntil = 0;
     return {
-      async generate(req) {
+      async generate(req, opts) {
         if (Date.now() >= skipPrimaryUntil) {
           try {
-            const out = await primary.generate(req);
+            const out = await primary.generate(req, opts);
             if (looksLikeLeak(out)) throw new Error('400 leaked reasoning in output');
             return out;
           } catch (e) {
@@ -140,7 +145,7 @@ export function makeProvider(agent) {
             console.log(`${new Date().toISOString()} model ${model} ${quota ? 'out of quota' : 'rejected'} (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using ${fbModel} for ${Math.round(holdMs / 60000)} min`);
           }
         }
-        return fallback.generate(req);
+        return fallback.generate(req, opts);
       },
     };
   }

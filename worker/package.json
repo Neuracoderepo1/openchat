@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node src/selftest.mjs"
+    "test": "node src/selftest.mjs && node --test test/*.test.mjs",
+    "test:unit": "node src/selftest.mjs"
   },
   "dependencies": {
     "pg": "^8.13.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }
