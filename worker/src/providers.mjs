@@ -47,15 +47,15 @@ async function checked(res, label) {
 }
 
 const PROVIDER_TIMEOUT_MS = () => Number(process.env.PROVIDER_TIMEOUT_SECONDS ?? 60) * 1000;
-const fetchSignal = (opts) => AbortSignal.any([AbortSignal.timeout(PROVIDER_TIMEOUT_MS()), ...(opts?.signal ? [opts.signal] : [])]);
+const fetchSignal = (opts, timeoutMs = PROVIDER_TIMEOUT_MS()) => AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(opts?.signal ? [opts.signal] : [])]);
 
-const gemini = ({ model, apiKey }) => ({
+const gemini = ({ model, apiKey, timeoutMs }) => ({
   async generate({ system, messages }, opts) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-      signal: fetchSignal(opts),
+      signal: fetchSignal(opts, timeoutMs),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: messages.map((m) => ({
@@ -73,12 +73,12 @@ const gemini = ({ model, apiKey }) => ({
 });
 
 // Works with any OpenAI-compatible endpoint (Groq, OpenRouter, Together, local vLLM/Ollama...)
-const openaiCompat = ({ model, apiKey, baseUrl }) => ({
+const openaiCompat = ({ model, apiKey, baseUrl, timeoutMs }) => ({
   async generate({ system, messages }, opts) {
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-      signal: fetchSignal(opts),
+      signal: fetchSignal(opts, timeoutMs),
       body: JSON.stringify({
         model,
         temperature: 1.0,
@@ -113,6 +113,45 @@ const mock = ({ label }) => {
   };
 };
 
+// Optional last-resort tier: an OpenAI-compatible endpoint (e.g. Groq, OpenRouter) used only when
+// the whole Gemini chain fails. Enabled per agent by <AGENT>_LAST_RESORT_MODEL together with
+// OPENAI_COMPAT_API_KEY and OPENAI_COMPAT_BASE_URL. With any of those missing it is simply off.
+function lastResortFor(K, env) {
+  const model = env[`${K}_LAST_RESORT_MODEL`];
+  if (!model) return null;
+  if (!env.OPENAI_COMPAT_API_KEY || !env.OPENAI_COMPAT_BASE_URL) {
+    console.log(`${new Date().toISOString()} ${K}_LAST_RESORT_MODEL is set but OPENAI_COMPAT_API_KEY / OPENAI_COMPAT_BASE_URL are missing; last-resort tier disabled`);
+    return null;
+  }
+  return openaiCompat({ model, apiKey: env.OPENAI_COMPAT_API_KEY, baseUrl: env.OPENAI_COMPAT_BASE_URL });
+}
+
+function withLastResort(chain, lastResort, env) {
+  const holdMs = Number(env.LAST_RESORT_HOLD_SECONDS ?? 120) * 1000;
+  let skipChainUntil = 0;
+  return {
+    async generate(req, opts) {
+      let chainErr = null;
+      if (Date.now() >= skipChainUntil) {
+        try { return await chain.generate(req, opts); }
+        catch (e) {
+          if (opts?.signal?.aborted) throw e;            // shutdown / lease loss: never fall through
+          chainErr = e;
+          skipChainUntil = Date.now() + holdMs;          // stop hammering a failing chain for a short while
+          console.log(`${new Date().toISOString()} gemini chain failed (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using last-resort model for ${Math.round(holdMs / 1000)}s`);
+        }
+      }
+      try { return await lastResort.generate(req, opts); }
+      catch (e) {
+        if (opts?.signal?.aborted) throw e;
+        // If either tier was rate-limited, surface that so the engine pauses instead of spinning.
+        if (chainErr instanceof QuotaError && !(e instanceof QuotaError)) throw chainErr;
+        throw e;
+      }
+    },
+  };
+}
+
 export function makeProvider(agent) {
   const env = process.env;
   const K = agent.key.toUpperCase();
@@ -122,32 +161,39 @@ export function makeProvider(agent) {
   if (p === 'mock') return mock({ label: agent.key });
   if (p === 'gemini') {
     if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY missing');
-    const primary = gemini({ model, apiKey: env.GEMINI_API_KEY });
+    const lastResort = lastResortFor(K, env);
+    // With a last-resort tier, the Gemini tiers get a shorter per-call limit so a hung call
+    // cannot use up the whole provider budget before the last resort gets its turn.
+    const tierMs = lastResort ? Math.min(PROVIDER_TIMEOUT_MS(), Number(env.GEMINI_TIER_TIMEOUT_SECONDS ?? 25) * 1000) : undefined;
+    const primary = gemini({ model, apiKey: env.GEMINI_API_KEY, timeoutMs: tierMs });
     const fbModel = env[`${K}_FALLBACK_MODEL`];
-    if (!fbModel || fbModel === model) return primary;
-    // Model fallback: if the primary model is rejected or out of quota, use the fallback model
-    // (a separate model has its own free quota). The failing model is skipped for a while.
-    // Only when BOTH are unavailable does a QuotaError propagate, so the engine pauses.
-    const fallback = gemini({ model: fbModel, apiKey: env.GEMINI_API_KEY });
-    let skipPrimaryUntil = 0;
-    return {
-      async generate(req, opts) {
-        if (Date.now() >= skipPrimaryUntil) {
-          try {
-            const out = await primary.generate(req, opts);
-            if (looksLikeLeak(out)) throw new Error('400 leaked reasoning in output');
-            return out;
-          } catch (e) {
-            const quota = e instanceof QuotaError;
-            if (!quota && !/\b(400|403|404)\b|empty text/.test(String(e.message))) throw e;
-            const holdMs = quota ? Math.max(e.retryAfterMs ?? 0, 10 * 60_000) : 30 * 60_000;
-            skipPrimaryUntil = Date.now() + holdMs;
-            console.log(`${new Date().toISOString()} model ${model} ${quota ? 'out of quota' : 'rejected'} (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using ${fbModel} for ${Math.round(holdMs / 60000)} min`);
+    let chain = primary;
+    if (fbModel && fbModel !== model) {
+      // Model fallback: if the primary model is rejected or out of quota, use the fallback model
+      // (a separate model has its own free quota). The failing model is skipped for a while.
+      // Only when BOTH are unavailable does a QuotaError propagate, so the engine pauses.
+      const fallback = gemini({ model: fbModel, apiKey: env.GEMINI_API_KEY, timeoutMs: tierMs });
+      let skipPrimaryUntil = 0;
+      chain = {
+        async generate(req, opts) {
+          if (Date.now() >= skipPrimaryUntil) {
+            try {
+              const out = await primary.generate(req, opts);
+              if (looksLikeLeak(out)) throw new Error('400 leaked reasoning in output');
+              return out;
+            } catch (e) {
+              const quota = e instanceof QuotaError;
+              if (!quota && !/\b(400|403|404)\b|empty text/.test(String(e.message))) throw e;
+              const holdMs = quota ? Math.max(e.retryAfterMs ?? 0, 10 * 60_000) : 30 * 60_000;
+              skipPrimaryUntil = Date.now() + holdMs;
+              console.log(`${new Date().toISOString()} model ${model} ${quota ? 'out of quota' : 'rejected'} (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using ${fbModel} for ${Math.round(holdMs / 60000)} min`);
+            }
           }
-        }
-        return fallback.generate(req, opts);
-      },
-    };
+          return fallback.generate(req, opts);
+        },
+      };
+    }
+    return lastResort ? withLastResort(chain, lastResort, env) : chain;
   }
   if (p === 'openai_compat') {
     if (!env.OPENAI_COMPAT_API_KEY || !env.OPENAI_COMPAT_BASE_URL)

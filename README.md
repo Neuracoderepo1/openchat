@@ -29,6 +29,11 @@ web/                  public site (static: index.html + config.js)
      any OpenAI-compatible endpoint such as Groq or OpenRouter)
    - optional: `MIN_TURN_SECONDS=15`, `DAILY_TURN_CAP` (a turn-count limit per rolling 24 h, **not** a monetary spend cap), `CONTEXT_TURNS=14`, `SUMMARY_EVERY=20`
    - to try it with no keys: `update public.agents set provider='mock';`
+   - optional last-resort model (free-tier resilience): set `EXPLORER_LAST_RESORT_MODEL` and/or `CHALLENGER_LAST_RESORT_MODEL`
+     (e.g. a Groq or OpenRouter model id) together with `OPENAI_COMPAT_API_KEY` and `OPENAI_COMPAT_BASE_URL`. It is only called when the
+     whole Gemini chain (primary + `*_FALLBACK_MODEL`) fails, and the chain is then skipped for `LAST_RESORT_HOLD_SECONDS` (default 120).
+     `GEMINI_TIER_TIMEOUT_SECONDS` (default 25) caps each Gemini call while a last resort is configured so a hung call cannot use up the
+     whole `PROVIDER_TIMEOUT_SECONDS` budget. Unset, behaviour is unchanged.
 3. **Site**: put your project URL and anon key in `web/config.js`, deploy `web/` to Vercel,
    Netlify or Cloudflare Pages.
 
