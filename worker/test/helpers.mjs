@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export const ADMIN_URL = process.env.TEST_DATABASE_URL;
+const SETUP_LOCK = 724130001; // arbitrary constant shared by every test process
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const withDb = (url, db) => { const u = new URL(url); u.pathname = '/' + db; return u.toString(); };
 
@@ -26,17 +27,27 @@ end $$;
 
 export async function createTestDb() {
   const name = 'tm_test_' + randomUUID().replace(/-/g, '').slice(0, 12);
+  // Roles (anon, authenticated, engine_worker) are cluster-wide, and node:test runs test files
+  // in parallel on multi-core runners. Concurrent CREATE/ALTER/GRANT on the same role fails with
+  // "tuple concurrently updated", so serialize the role-touching setup across processes with an
+  // advisory lock held on the shared admin database (advisory locks are per-database).
   const admin = new pg.Client({ connectionString: ADMIN_URL });
   await admin.connect();
-  await admin.query(`create database ${name}`);
-  await admin.end();
+  await admin.query('select pg_advisory_lock($1)', [SETUP_LOCK]);
   const url = withDb(ADMIN_URL, name);
-  const su = new pg.Client({ connectionString: url });
-  await su.connect();
-  await su.query(SHIM);
-  await su.query(fs.readFileSync(root + 'supabase/schema.sql', 'utf8'));
-  await su.query("alter role engine_worker password 'testpw'");
-  await su.query("update public.agents set provider='mock'");
+  let su;
+  try {
+    await admin.query(`create database ${name}`);
+    su = new pg.Client({ connectionString: url });
+    await su.connect();
+    await su.query(SHIM);
+    await su.query(fs.readFileSync(root + 'supabase/schema.sql', 'utf8'));
+    await su.query("alter role engine_worker password 'testpw'");
+    await su.query("update public.agents set provider='mock'");
+  } finally {
+    await admin.query('select pg_advisory_unlock($1)', [SETUP_LOCK]).catch(() => {});
+    await admin.end();
+  }
   const wu = new URL(url); wu.username = 'engine_worker'; wu.password = 'testpw';
   const workerUrl = wu.toString();
   const pools = [];
