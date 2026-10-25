@@ -34,6 +34,8 @@ web/                  public site (static: index.html + config.js)
      whole Gemini chain (primary + `*_FALLBACK_MODEL`) fails, and the chain is then skipped for `LAST_RESORT_HOLD_SECONDS` (default 120).
      `GEMINI_TIER_TIMEOUT_SECONDS` (default 25) caps each Gemini call while a last resort is configured so a hung call cannot use up the
      whole `PROVIDER_TIMEOUT_SECONDS` budget. Unset, behaviour is unchanged.
+     `OPENAI_COMPAT_MAX_TOKENS` (default 300) sets the reply token budget for OpenAI-compatible models; free "thinking" models
+     spend it on hidden reasoning first, so raise it (e.g. 800) if the last resort keeps returning empty text.
 3. **Site**: put your project URL and anon key in `web/config.js`, deploy `web/` to Vercel,
    Netlify or Cloudflare Pages.
 

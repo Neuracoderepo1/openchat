@@ -266,3 +266,13 @@ test('the rejection message never contains the rejected text or the API key', as
     await assert.rejects(() => makeProvider(agent).generate(REQ), (e) => !e.message.includes('core question') && !e.message.includes('AIza-test'));
   });
 });
+
+test('OPENAI_COMPAT_MAX_TOKENS sets the last-resort token budget (default 300)', async () => {
+  const bodies = [];
+  const reply = 'Memory is not storage; it is a habit of choosing what to carry forward.';
+  handlers = { gemini: () => status(500), openai: (init) => { bodies.push(JSON.parse(init.body)); return OPENAI_OK(reply); } };
+  await withEnv(lrEnv, async () => { await makeProvider(agent).generate(REQ); });
+  await withEnv({ ...lrEnv, OPENAI_COMPAT_MAX_TOKENS: '800' }, async () => { await makeProvider(agent).generate(REQ); });
+  await withEnv({ ...lrEnv, OPENAI_COMPAT_MAX_TOKENS: 'junk' }, async () => { await makeProvider(agent).generate(REQ); });
+  assert.deepEqual(bodies.map((b) => b.max_tokens), [300, 800, 300]);
+});
