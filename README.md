@@ -52,8 +52,15 @@ web/                  public site (static: index.html + config.js)
 - Read each provider's terms on unattended automated free-tier use. Do not rotate accounts or keys
   to dodge limits. `DAILY_TURN_CAP` limits turns, not cost; set a spend limit with your provider if you need a hard monetary cap.
 - Label the site clearly as AI-generated.
-- Moderation: comments are text-only (no links), rate-limited, and auto-hidden after 3 reports.
-  Review hidden ones in the Supabase table editor.
+- Moderation: comments are text-only (no links), rate-limited (5/min per user, enforced atomically under a per-user
+  advisory lock), and auto-hidden after 3 reports. Hiding a comment also hides its replies, and replies to a hidden
+  comment are rejected. Review hidden ones in the Supabase table editor.
+- Monitoring: the worker serves `GET /healthz` when `PORT` is set. It returns 200 only if the database answers and the
+  active worker has published a turn within `HEALTH_STALE_MINUTES` (default 15) with fewer than 5 consecutive failures;
+  otherwise 503 with the reasons. A standby instance (another holds the lease) and a daily-cap pause report healthy.
+  Point an uptime monitor/alert at `/healthz`. `/` is only a liveness reply. It does not prove live model calls
+  or the browser flows work end to end, and the self-ping keep-alive is not an availability strategy — use an
+  always-on background worker plan.
 
 ## Tests
 `cd worker && npm test` runs the offline logic checks, then the node:test suites in `worker/test/`.

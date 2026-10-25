@@ -59,6 +59,9 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
   let stopping = false;
   let forcePivotOnce = false;
   let pendingReset = cfg.resetMemory;
+  // In-memory progress signals for /healthz (see health.mjs). Not persisted; they describe THIS process.
+  const health = { startedAt: Date.now(), lastTurnAt: null, failures: 0, lastError: null, holdsLease: false, capped: false, shuttingDown: false };
+  const noteError = (e) => { health.lastError = { category: errorCategory(e), at: Date.now() }; };
 
   const q = (text, params) => pool.query(text, params);
 
@@ -228,7 +231,8 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
 
     while (!stopping) {
       try {
-        if (!(await lease.acquire())) {
+        health.holdsLease = await lease.acquire();
+        if (!health.holdsLease) {
           // Not our lease: do NOT touch shared status (it belongs to the active worker).
           log('another worker holds the lease; waiting');
           await sleep(cfg.acquireRetryMs);
@@ -243,11 +247,15 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
         await withHeartbeat(async (leaseSignal) => {
           const res = await turn(agents, leaseSignal);
           failures = 0; quotaStreak = 0;
+          health.failures = 0; health.capped = res === 'capped';
+          if (res === 'ok') health.lastTurnAt = Date.now();
           if (res === 'ok' || res === 'dup') await sleep(Math.max(0, cfg.minTurnMs - (Date.now() - started)), leaseSignal);
         });
       } catch (e) {
         if (stopping && (e instanceof ShutdownError || e?.name === 'AbortError' || e instanceof LeaseLostError || e?.message === 'shutdown grace elapsed')) break;
+        if (!(e instanceof ShutdownError)) noteError(e);
         if (e instanceof LeaseLostError) {
+          health.holdsLease = false;
           log(`lease lost; abandoning cycle (no further writes) [${errorCategory(e)}]: ${redact(e.message)}`);
           try { await sleep(MIN_QUOTA_WAIT_MS); } catch { /* ignore */ }
           continue;
@@ -264,7 +272,7 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
             });
           } catch (e2) { if (!(e2 instanceof LeaseLostError)) log(`pause failed [${errorCategory(e2)}]:`, redact(e2.message)); }
         } else {
-          failures++;
+          failures++; health.failures = failures;
           const wait = Math.min(300_000, 5_000 * 2 ** Math.min(failures, 6));
           log(`error [${errorCategory(e)}]:`, redact(e.message), `— retry in ${Math.round(wait / 1000)}s`);
           await setStatus('recovering', 'Recovering from an error', new Date(Date.now() + wait)).catch(() => {});   // fenced: no-op if we lost ownership
@@ -285,11 +293,11 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
 
   function stop() {
     if (stopping) return;
-    stopping = true;
+    stopping = true; health.shuttingDown = true;
     log('shutdown requested');
     shutdownAc.abort();
     setTimeout(() => graceAc.abort(new ShutdownError('shutdown grace elapsed')), cfg.shutdownGraceMs).unref?.();
   }
 
-  return { run, stop, turn, lease, loadAgents, setStatus, withHeartbeat, shutdownCleanup, _cfg: cfg };
+  return { run, stop, turn, healthSnapshot: () => ({ ...health }), lease, loadAgents, setStatus, withHeartbeat, shutdownCleanup, _cfg: cfg };
 }

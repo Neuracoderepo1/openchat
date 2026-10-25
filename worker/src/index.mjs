@@ -5,6 +5,7 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { createEngine, configFromEnv } from './engine.mjs';
+import { evaluateHealth } from './health.mjs';
 
 const env = process.env;
 const DATABASE_URL = env.WORKER_DATABASE_URL;
@@ -17,9 +18,20 @@ pool.on('error', (e) => console.error(new Date().toISOString(), 'pool error:', e
 const engine = createEngine({ pool, owner: OWNER, config: configFromEnv(env) });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => engine.stop());
 
-// Tiny health endpoint so hosts that require an open port (e.g. Render web services) keep us alive.
+// HTTP endpoints. `/` stays a trivial liveness reply (hosts that require an open port, and existing
+// host health checks, keep working). `/healthz` is the real signal: 200 only if the database answers
+// and the active worker is publishing turns; 503 otherwise. Point uptime monitors/alerts at /healthz.
 if (env.PORT) {
-  http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); }).listen(Number(env.PORT));
+  const staleMs = Number(env.HEALTH_STALE_MINUTES ?? 15) * 60_000;
+  const probeDb = async () => { try { await Promise.race([pool.query('select 1'), new Promise((_, rej) => setTimeout(() => rej(new Error('db probe timeout')), 5_000))]); return true; } catch { return false; } };
+  http.createServer(async (req, res) => {
+    if (req.url?.split('?')[0] === '/healthz') {
+      const h = evaluateHealth({ dbOk: await probeDb(), snap: engine.healthSnapshot(), staleMs });
+      res.writeHead(h.ok ? 200 : 503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      return res.end(JSON.stringify(h));
+    }
+    res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok');
+  }).listen(Number(env.PORT));
 }
 // Free web services sleep after ~15 min without inbound traffic. Request our own public URL
 // every 10 minutes so the host sees traffic and keeps the worker awake. No-op when not on Render.

@@ -74,6 +74,46 @@ else {
     await assert.rejects(as('authenticated', U2, async (c) => { await ins(c, 1, 1); const r = await c.query('select max(id) m from public.comments'); await ins(c, 1, r.rows[0].m); }), /reply to a reply/);
   });
 
+  test('moderation: cannot reply to a hidden comment; hiding a comment hides its replies', async () => {
+    await seed();
+    await db.su.query("insert into public.comments(id,exchange_no,display_name,body,user_id) values (1,1,'alice','top',$1),(2,1,'alice','other top',$1)", [U1]);
+    await db.su.query("select setval(pg_get_serial_sequence('public.comments','id'), 100)");
+    await db.su.query("insert into public.comments(id,exchange_no,parent_id,display_name,body,user_id) values (3,1,1,'carol','existing reply',$1)", [U1]);
+    const reply = (c, parent) => c.query('insert into public.comments(exchange_no,parent_id,display_name,body) values (1,$1,$2,$3)', [parent, 'bob', 'reply text']);
+    await as('authenticated', U2, (c) => reply(c, 1));                                           // visible parent: allowed
+    // Three distinct reporters hide comment 1 (the report trigger runs as definer).
+    for (const [i, u] of ['aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000002', 'aaaaaaaa-0000-0000-0000-000000000003'].entries()) {
+      await db.su.query('insert into public.reports(comment_id,user_id,reason) values (1,$1,$2)', [u, 'r' + i]);
+    }
+    const hidden = await db.su.query('select id from public.comments where hidden order by id');
+    assert.ok(hidden.rows.map((r) => Number(r.id)).includes(1) && hidden.rows.map((r) => Number(r.id)).includes(3), 'parent and its existing reply are hidden');
+    assert.ok(!hidden.rows.map((r) => Number(r.id)).includes(2), 'unrelated comment stays visible');
+    await assert.rejects(as('authenticated', U2, (c) => reply(c, 1)), /hidden comment/);          // hidden parent: rejected
+    await as('authenticated', U2, (c) => reply(c, 2));                                           // other thread still works
+    const visible = await as('authenticated', U2, (c) => c.query('select id from public.comments where parent_id = 1'));
+    assert.equal(visible.rowCount, 0, 'no reply under the hidden parent is visible through the API');
+  });
+
+  test('rate limit is atomic: concurrent inserts by one user cannot exceed 5 per minute', async () => {
+    await seed();
+    const attempt = async (i) => {
+      const c = new pg.Client({ connectionString: db.url }); await c.connect();
+      try {
+        await c.query('begin'); await c.query('set local role authenticated');
+        await c.query("select set_config('request.jwt.claim.sub', $1, true)", [U1]);
+        await c.query('insert into public.comments(exchange_no,display_name,body) values (1,$1,$2)', ['racer', 'burst ' + i]);
+        await sleep(30);                                                                         // widen the check-then-insert window
+        await c.query('commit'); return true;
+      } catch (e) { await c.query('rollback').catch(() => {}); if (!/too many comments/.test(e.message)) throw e; return false; }
+      finally { await c.end(); }
+    };
+    const results = await Promise.all(Array.from({ length: 12 }, (_, i) => attempt(i)));
+    assert.equal(results.filter(Boolean).length, 5, 'exactly 5 of 12 concurrent inserts succeed');
+    const n = await db.su.query('select count(*)::int n from public.comments where user_id = $1', [U1]);
+    assert.equal(n.rows[0].n, 5);
+    await seed();
+  });
+
   test('rendering contract: schema now only permits depth<=1, matching the UI (top-level + direct replies)', async () => {
     const html = fs.readFileSync(new URL('../../web/index.html', import.meta.url), 'utf8');
     assert.match(html, /replyTo = c\.parent_id \|\| c\.id/);                                      // UI flattens replies to one level
