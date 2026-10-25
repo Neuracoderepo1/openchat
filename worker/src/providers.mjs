@@ -49,6 +49,15 @@ async function checked(res, label) {
 const PROVIDER_TIMEOUT_MS = () => Number(process.env.PROVIDER_TIMEOUT_SECONDS ?? 60) * 1000;
 const fetchSignal = (opts, timeoutMs = PROVIDER_TIMEOUT_MS()) => AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(opts?.signal ? [opts.signal] : [])]);
 
+// Every Gemini model (primary, fallback or standalone) returns text through this guard, so no Gemini
+// path can hand leaked reasoning to the engine. The "400" prefix keeps the existing failover rule
+// (a 400/403/404 on the primary moves on to the fallback model). The rejected text is deliberately
+// NOT included in the error message, so it cannot end up in logs or be published by accident.
+function checkedGeminiOutput(text) {
+  if (looksLikeLeak(text)) throw new Error('400 leaked reasoning in output');
+  return text;
+}
+
 const gemini = ({ model, apiKey, timeoutMs }) => ({
   async generate({ system, messages }, opts) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -68,7 +77,7 @@ const gemini = ({ model, apiKey, timeoutMs }) => ({
     const j = await checked(res, 'gemini');
     const t = j?.candidates?.[0]?.content?.parts?.filter((p) => !p.thought).map((p) => p.text ?? '').join('') ?? '';
     if (!t.trim()) throw new Error('gemini returned empty text');
-    return t;
+    return checkedGeminiOutput(t);
   },
 });
 
@@ -197,9 +206,7 @@ export function makeProvider(agent) {
         async generate(req, opts) {
           if (Date.now() >= skipPrimaryUntil) {
             try {
-              const out = await primary.generate(req, opts);
-              if (looksLikeLeak(out)) throw new Error('400 leaked reasoning in output');
-              return out;
+              return await primary.generate(req, opts);   // leak-checked inside gemini(); a rejection falls through to the fallback model
             } catch (e) {
               const quota = e instanceof QuotaError;
               if (!quota && !/\b(400|403|404)\b|empty text/.test(String(e.message))) throw e;

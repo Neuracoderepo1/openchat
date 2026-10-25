@@ -143,3 +143,126 @@ test('a guard-model verdict from the last resort is never returned', async () =>
     await assert.rejects(() => makeProvider(agent).generate(REQ), /rejected \(guard-model verdict\)/);
   });
 });
+
+// ---------- Gemini output guard: every Gemini path must reject leaked reasoning ----------
+// Fixtures are real looksLikeLeak() hits (see LEAK in src/prompts.mjs).
+const LEAKS = [
+  "User's core question: would you trade panic for silence? Context: earlier turns",
+  "The Explorer's argument: efficiency is a dead end. The Challenger's task: be witty",
+  '* Point one\n* Point two',
+];
+const LEAK = LEAKS[0];
+const GOOD = 'Memory is not storage; it is a habit of choosing what to carry forward.';
+const GOOD_FB = 'Forgetting is the price of attention, and attention is the price of meaning.';
+const chainEnv = { GEMINI_API_KEY: 'AIza-test' };   // primary only, no fallback model
+
+test('guard fixtures really are detected by looksLikeLeak (tests cannot pass vacuously)', async () => {
+  const { looksLikeLeak } = await import('../src/prompts.mjs');
+  for (const t of LEAKS) assert.equal(looksLikeLeak(t), true);
+  assert.equal(looksLikeLeak(GOOD), false);
+  assert.equal(looksLikeLeak(GOOD_FB), false);
+});
+
+test('primary-only Gemini: leaked output is rejected, never returned', async () => {
+  handlers = { gemini: () => GEMINI_OK(LEAK), openai: () => assert.fail('must not be called') };
+  await withEnv(chainEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), /leaked reasoning/);
+  });
+  assert.deepEqual(calls, ['gemini:flash-x']);
+});
+
+test('primary leak with a fallback model: fallback answer is used', async () => {
+  handlers = { gemini: (m) => GEMINI_OK(m === 'flash-x' ? LEAK : GOOD_FB), openai: () => assert.fail('must not be called') };
+  await withEnv(baseEnv, async () => {
+    assert.equal(await makeProvider(agent).generate(REQ), GOOD_FB);
+  });
+  assert.deepEqual(calls, ['gemini:flash-x', 'gemini:gemma-x']);
+});
+
+test('fallback leak: output from the fallback model is rejected, not returned', async () => {
+  handlers = { gemini: (m) => (m === 'flash-x' ? status(429) : GEMINI_OK(LEAK)), openai: () => assert.fail('must not be called') };
+  await withEnv(baseEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), /leaked reasoning/);
+  });
+  assert.deepEqual(calls, ['gemini:flash-x', 'gemini:gemma-x']);   // no retry loop inside the provider
+});
+
+test('both Gemini models leak: error propagates, nothing is returned', async () => {
+  handlers = { gemini: () => GEMINI_OK(LEAK), openai: () => assert.fail('must not be called') };
+  await withEnv(baseEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), /leaked reasoning/);
+  });
+  assert.deepEqual(calls, ['gemini:flash-x', 'gemini:gemma-x']);
+});
+
+test('valid fallback response is still accepted', async () => {
+  handlers = { gemini: (m) => (m === 'flash-x' ? status(429) : GEMINI_OK(GOOD_FB)), openai: () => assert.fail('must not be called') };
+  await withEnv(baseEnv, async () => {
+    assert.equal(await makeProvider(agent).generate(REQ), GOOD_FB);
+  });
+});
+
+test('primary and fallback enforce equivalent leak validation for every fixture', async () => {
+  for (const leak of LEAKS) {
+    for (const path of ['primary-only', 'fallback']) {
+      calls = [];
+      handlers = path === 'primary-only'
+        ? { gemini: () => GEMINI_OK(leak), openai: () => assert.fail('no') }
+        : { gemini: (m) => (m === 'flash-x' ? status(429) : GEMINI_OK(leak)), openai: () => assert.fail('no') };
+      await withEnv(path === 'primary-only' ? chainEnv : baseEnv, async () => {
+        await assert.rejects(() => makeProvider(agent).generate(REQ), /leaked reasoning/, `${path}: ${leak.slice(0, 30)}`);
+      });
+    }
+  }
+});
+
+test('fallback leak with last resort configured: chain failure semantics apply, leaked text never returned', async () => {
+  handlers = { gemini: (m) => (m === 'flash-x' ? status(429) : GEMINI_OK(LEAK)), openai: () => OPENAI_OK(GOOD) };
+  await withEnv(lrEnv, async () => {
+    const out = await makeProvider(agent).generate(REQ);
+    assert.equal(out, GOOD);
+    assert.notEqual(out, LEAK);
+  });
+  assert.deepEqual(calls, ['gemini:flash-x', 'gemini:gemma-x', 'openai']);
+});
+
+test('fallback leak and last-resort leak: rejected by the last-resort guard', async () => {
+  handlers = { gemini: (m) => (m === 'flash-x' ? status(429) : GEMINI_OK(LEAK)), openai: () => OPENAI_OK(LEAK) };
+  await withEnv(lrEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), /last-resort output rejected \(leaked reasoning\)/);
+  });
+});
+
+test('fallback leak does not hide the quota signal when the last resort is also rate-limited', async () => {
+  handlers = { gemini: (m) => (m === 'flash-x' ? status(429) : GEMINI_OK(LEAK)), openai: () => status(429, 'try again in 30s') };
+  await withEnv(lrEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), (e) => e instanceof QuotaError);
+  });
+});
+
+test('both Gemini models rate-limited (no last resort): QuotaError propagates', async () => {
+  handlers = { gemini: () => status(429), openai: () => assert.fail('must not be called') };
+  await withEnv(baseEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), (e) => e instanceof QuotaError);
+  });
+  assert.deepEqual(calls, ['gemini:flash-x', 'gemini:gemma-x']);
+});
+
+test('abort while the fallback returns leaked text: rejected, no last-resort call', async () => {
+  const ac = new AbortController();
+  handlers = {
+    gemini: (m) => { if (m === 'flash-x') return status(429); ac.abort(new Error('shutdown')); return GEMINI_OK(LEAK); },
+    openai: () => assert.fail('must not be called when aborted'),
+  };
+  await withEnv(lrEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ, { signal: ac.signal }), /leaked reasoning|shutdown|abort/i);
+  });
+  assert.ok(!calls.includes('openai'));
+});
+
+test('the rejection message never contains the rejected text or the API key', async () => {
+  handlers = { gemini: () => GEMINI_OK(LEAK), openai: () => assert.fail('no') };
+  await withEnv(chainEnv, async () => {
+    await assert.rejects(() => makeProvider(agent).generate(REQ), (e) => !e.message.includes('core question') && !e.message.includes('AIza-test'));
+  });
+});
