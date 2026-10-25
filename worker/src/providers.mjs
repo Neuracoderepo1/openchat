@@ -116,11 +116,15 @@ const mock = ({ label }) => {
 // A last-resort model is an arbitrary third-party model, so its output is checked before it can be published:
 // guard/safety-classifier verdicts (e.g. "User Safety: safe"), leaked reasoning and near-empty replies are rejected.
 const GUARD_VERDICT = /\b(user|response|assistant|prompt) safety\s*:|\b(safe|unsafe)\s*\n?\s*(s\d{1,2}\b|categories)|^\s*(safe|unsafe)\s*$/im;
+// Reasoning-style openers a free model may emit instead of a reply: talking *about* "the user" or the task.
+// The two agents never address or describe a "user", so a reply that does is the model's scratchpad.
+const META_REASONING = /^\s*(the|this) user\b|\buser (is|has|wants|asks|asked|argues|argued|said|says|seems|continues|presents|makes|making|raises)\b|^\s*(okay|ok|alright|let me|let's|i('ll| will| need| should)|first,? i|here('s| is) (a|my|the) (response|reply|draft))\b/im;
 export function unusableLastResort(t) {
   const x = String(t ?? '').trim();
   if (x.length < 20) return 'too short';
   if (GUARD_VERDICT.test(x)) return 'guard-model verdict';
   if (looksLikeLeak(x)) return 'leaked reasoning';
+  if (META_REASONING.test(x)) return 'meta-commentary about "the user"';
   return null;
 }
 

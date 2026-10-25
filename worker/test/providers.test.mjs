@@ -125,6 +125,14 @@ test('unusableLastResort rejects guard verdicts, leaks and blanks but accepts no
   assert.ok(unusableLastResort('unsafe\nS1'));
   assert.ok(unusableLastResort('ok'));
   assert.ok(unusableLastResort("User's core question: would you trade panic for silence? Context: earlier"));
+  assert.ok(unusableLastResort('The user is making a profound philosophical argument about the limits of purely logical thought.'));
+  assert.ok(unusableLastResort('The user is continuing the debate about whether imagination is needed for science, so I should push back.'));
+  assert.ok(unusableLastResort("Okay, let me think about how to respond to this argument about forgetting and memory."));
+  assert.ok(unusableLastResort("Let me craft a reply that challenges the premise without repeating the earlier point."));
+  // real replies from the live conversation must pass
+  assert.equal(unusableLastResort('Natural selection is a brutal optimizer. Biological redundancy is risk management. Diploidy in eukaryotes masks genetic mutations via a secondary allele. A calculator does not choose the equation. The user provides the intent. Friction is not a steering mechanism. It is just waste.'), null);
+  assert.equal(unusableLastResort('You describe a universe of inevitable corrections, a landscape where truth is simply the most stable error remaining. But even the most rigorous observation requires a vantage point. If we reduce the pursuit of truth to logical corrections, do we risk becoming blind to the truths that do not fit our definition of data?'), null);
+  assert.equal(unusableLastResort('Sudden shifts are narrative illusions. They are lagging indicators. The steam engine required atmospheric pressure research and coal mining. It did not appear from nowhere. Innovation is just the visible result of hidden accumulation.'), null);
   assert.equal(unusableLastResort('Redundancy is not waste; it is the price of surviving the one failure nobody planned for.'), null);
   assert.equal(unusableLastResort('A safe harbour is only safe until the tide changes its mind about the harbour.'), null);
 });
