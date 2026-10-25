@@ -115,7 +115,27 @@ export function makeProvider(agent) {
   if (p === 'mock') return mock({ label: agent.key });
   if (p === 'gemini') {
     if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY missing');
-    return gemini({ model, apiKey: env.GEMINI_API_KEY });
+    const primary = gemini({ model, apiKey: env.GEMINI_API_KEY });
+    const fbModel = env[`${K}_FALLBACK_MODEL`];
+    if (!fbModel || fbModel === model) return primary;
+    // Model fallback: if the primary model is rejected (not a quota error), use the fallback and
+    // avoid retrying the primary for 30 minutes. Quota errors still propagate so the engine pauses.
+    const fallback = gemini({ model: fbModel, apiKey: env.GEMINI_API_KEY });
+    let badUntil = 0;
+    return {
+      async generate(req) {
+        if (Date.now() >= badUntil) {
+          try { return await primary.generate(req); }
+          catch (e) {
+            if (e instanceof QuotaError) throw e;
+            if (!/\b(400|403|404)\b/.test(String(e.message))) throw e;
+            badUntil = Date.now() + 30 * 60_000;
+            console.log(`${new Date().toISOString()} model ${model} rejected (${String(e.message).slice(0, 80).replace(/\s+/g, ' ')}); using ${fbModel} for 30 min`);
+          }
+        }
+        return fallback.generate(req);
+      },
+    };
   }
   if (p === 'openai_compat') {
     if (!env.OPENAI_COMPAT_API_KEY || !env.OPENAI_COMPAT_BASE_URL)
