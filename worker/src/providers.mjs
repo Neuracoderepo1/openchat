@@ -113,6 +113,17 @@ const mock = ({ label }) => {
   };
 };
 
+// A last-resort model is an arbitrary third-party model, so its output is checked before it can be published:
+// guard/safety-classifier verdicts (e.g. "User Safety: safe"), leaked reasoning and near-empty replies are rejected.
+const GUARD_VERDICT = /\b(user|response|assistant|prompt) safety\s*:|\b(safe|unsafe)\s*\n?\s*(s\d{1,2}\b|categories)|^\s*(safe|unsafe)\s*$/im;
+export function unusableLastResort(t) {
+  const x = String(t ?? '').trim();
+  if (x.length < 20) return 'too short';
+  if (GUARD_VERDICT.test(x)) return 'guard-model verdict';
+  if (looksLikeLeak(x)) return 'leaked reasoning';
+  return null;
+}
+
 // Optional last-resort tier: an OpenAI-compatible endpoint (e.g. Groq, OpenRouter) used only when
 // the whole Gemini chain fails. Enabled per agent by <AGENT>_LAST_RESORT_MODEL together with
 // OPENAI_COMPAT_API_KEY and OPENAI_COMPAT_BASE_URL. With any of those missing it is simply off.
@@ -141,8 +152,12 @@ function withLastResort(chain, lastResort, env) {
           console.log(`${new Date().toISOString()} gemini chain failed (${String(e.message).slice(0, 70).replace(/\s+/g, ' ')}); using last-resort model for ${Math.round(holdMs / 1000)}s`);
         }
       }
-      try { return await lastResort.generate(req, opts); }
-      catch (e) {
+      try {
+        const out = await lastResort.generate(req, opts);
+        const bad = unusableLastResort(out);
+        if (bad) throw new Error(`last-resort output rejected (${bad}) - empty or leaked reply`);
+        return out;
+      } catch (e) {
         if (opts?.signal?.aborted) throw e;
         // If either tier was rate-limited, surface that so the engine pauses instead of spinning.
         if (chainErr instanceof QuotaError && !(e instanceof QuotaError)) throw chainErr;
