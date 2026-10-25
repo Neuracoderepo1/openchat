@@ -91,7 +91,7 @@ const openaiCompat = ({ model, apiKey, baseUrl, timeoutMs }) => ({
       body: JSON.stringify({
         model,
         temperature: 1.0,
-        max_tokens: 300,
+        max_tokens: Number(process.env.OPENAI_COMPAT_MAX_TOKENS) > 0 ? Number(process.env.OPENAI_COMPAT_MAX_TOKENS) : 300,   // free "thinking" models spend this on hidden reasoning first; raise it if replies come back empty
         messages: [{ role: 'system', content: system }, ...messages],
       }),
     });
