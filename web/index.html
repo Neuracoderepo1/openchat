@@ -148,8 +148,8 @@ input{border-bottom:1px solid var(--line);padding:4px 0;margin-bottom:6px;font-s
   }
 
   async function refreshTelemetry() {
-    const { data: last } = await sb.from('messages').select('exchange_no').order('turn_no', { ascending: false }).limit(1);
-    $('s-ex').textContent = last && last[0] ? Number(last[0].exchange_no).toLocaleString() : '0';
+    const { count: msgCount } = await sb.from('messages').select('turn_no', { count: 'exact', head: true });
+    $('s-ex').textContent = Math.ceil((msgCount ?? 0) / 2).toLocaleString();   // real exchanges, independent of turn numbering
     const { data: topics, count } = await sb.from('topics').select('label', { count: 'exact' }).order('id', { ascending: false }).limit(5);
     $('s-top').textContent = (count ?? 0).toLocaleString();
     $('trail').textContent = topics && topics.length ? 'Topic trail: ' + topics.map(t => t.label).reverse().join(' → ') : '';
