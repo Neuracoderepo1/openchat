@@ -2,6 +2,8 @@
 // Throws QuotaError on rate/usage limits so the engine can pause and resume.
 // Only authorised context (persona + the agents' own conversation) is ever sent.
 
+import { looksLikeLeak } from './prompts.mjs';
+
 export class QuotaError extends Error {
   constructor(msg, retryAfterMs = null) {
     super(msg);
@@ -60,7 +62,7 @@ const gemini = ({ model, apiKey }) => ({
       }),
     });
     const j = await checked(res, 'gemini');
-    const t = j?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') ?? '';
+    const t = j?.candidates?.[0]?.content?.parts?.filter((p) => !p.thought).map((p) => p.text ?? '').join('') ?? '';
     if (!t.trim()) throw new Error('gemini returned empty text');
     return t;
   },
@@ -126,8 +128,11 @@ export function makeProvider(agent) {
     return {
       async generate(req) {
         if (Date.now() >= skipPrimaryUntil) {
-          try { return await primary.generate(req); }
-          catch (e) {
+          try {
+            const out = await primary.generate(req);
+            if (looksLikeLeak(out)) throw new Error('400 leaked reasoning in output');
+            return out;
+          } catch (e) {
             const quota = e instanceof QuotaError;
             if (!quota && !/\b(400|403|404)\b/.test(String(e.message))) throw e;
             const holdMs = quota ? Math.max(e.retryAfterMs ?? 0, 10 * 60_000) : 30 * 60_000;

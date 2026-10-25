@@ -9,7 +9,7 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { makeProvider, QuotaError } from './providers.mjs';
-import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest, pickSeed, isNarrative } from './prompts.mjs';
+import { buildRequest, cleanOutput, isRepetitive, parseSummary, summaryRequest, pickSeed, isNarrative, looksLikeLeak } from './prompts.mjs';
 
 const env = process.env;
 const DATABASE_URL = env.WORKER_DATABASE_URL;
@@ -118,6 +118,7 @@ async function turn(agents) {
   const raw = await agents.providers[speakerKey].generate(req);
   const text = cleanOutput(raw, agent.name, other.name);
   if (!text) throw new Error('empty output after cleaning');
+  if (looksLikeLeak(text)) throw new Error('model output looked like leaked reasoning; discarded');
 
   // Persist the turn only if we still hold the lease. turn_no PK blocks duplicates.
   const client = await pool.connect();

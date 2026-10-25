@@ -61,6 +61,10 @@ function mergeAdjacent(msgs) {
   return out;
 }
 
+// Detects chain-of-thought / prompt-echo leaking into a reply (some models emit their reasoning as text).
+const LEAK = /(\b(user'?s|the user'?s) (core |main )?(question|point|argument|request)\b|\bthe (explorer|challenger)'?s? (argument|role|task|point|persona|turn|goal)\b|\b(my|the) (role|task|goal|persona) (is|as)\b|\bcontext:|\bconstraints?:|\bword count\b|\bdraft(ing)?:|\bI (need|should|must|will|want) to (respond|write|craft|reply|keep)\b|^\s*[*\-•] )/im;
+export const looksLikeLeak = (t) => LEAK.test(t);
+
 export function cleanOutput(text, agentName, otherName) {
   let t = text.trim();
   for (const n of [agentName, otherName, 'THE EXPLORER', 'THE CHALLENGER', 'Explorer', 'Challenger']) {

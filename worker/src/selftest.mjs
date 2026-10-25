@@ -1,6 +1,6 @@
 // Offline self-test for the pure logic (no database, no network).
 import assert from 'node:assert/strict';
-import { isRepetitive, similarity, cleanOutput, buildRequest, parseSummary, isNarrative } from './prompts.mjs';
+import { isRepetitive, similarity, cleanOutput, buildRequest, parseSummary, isNarrative, looksLikeLeak } from './prompts.mjs';
 import { makeProvider } from './providers.mjs';
 
 const mk = (n, a, c) => ({ turn_no: n, agent_key: a, content: c });
@@ -60,3 +60,12 @@ console.log('narrative detector ok');
 const sx = buildRequest({ agent: { key: 'challenger', name: 'The Challenger', persona: 'p' }, other: { key: 'explorer', name: 'The Explorer' }, summary: '', openThreads: '', recent: [mk(1, 'explorer', 'hi')], pivot: false, isOpening: false });
 assert.ok(/plain, precise and dry/.test(sx.system) && !/warm, curious/.test(sx.system));
 console.log('style ok');
+
+// 10. leaked reasoning is caught; normal replies pass
+assert.equal(looksLikeLeak("User's core question: Would you trade the human panic for silence? Context: The conversation has established"), true);
+assert.equal(looksLikeLeak("The Explorer's argument: Efficiency is a dead end. The Challenger's task: Analytical, witty"), true);
+assert.equal(looksLikeLeak("* Point one\n* Point two"), true);
+assert.equal(looksLikeLeak("Ramanujan did not calculate from divine fever; he used standard notebooks and algebraic manipulation."), false);
+assert.equal(looksLikeLeak("Efficiency is a cul-de-sac. A perfectly optimized engine never swerves into the unknown."), false);
+for (const m of varied) assert.equal(looksLikeLeak(m.content), false);
+console.log('leak filter ok');
