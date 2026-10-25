@@ -48,8 +48,10 @@ create table if not exists engine.state (
   open_threads text not null default '',
   pivot_until_turn bigint not null default 0,
   lease_owner text,
-  lease_until timestamptz
+  lease_until timestamptz,
+  fence bigint not null default 0      -- fencing token: bumped on every change of lease ownership
 );
+-- Upgrading an existing database: run supabase/migrations/20261025_engine_lease_fence.sql
 insert into engine.state(id) values (1) on conflict do nothing;
 
 -- ---------- Observers' Room (isolated from the engine) ----------
@@ -108,6 +110,23 @@ end $$;
 drop trigger if exists trg_reports_autohide on public.reports;
 create trigger trg_reports_autohide after insert on public.reports
   for each row execute function public.reports_autohide();
+
+-- Reply integrity (see supabase/migrations/20261025_comment_reply_integrity.sql)
+create or replace function public.comments_reply_integrity() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare p record;
+begin
+  if new.parent_id is null then return new; end if;
+  select exchange_no, parent_id into p from public.comments where id = new.parent_id;
+  if not found then raise exception 'Reply target does not exist'; end if;
+  if p.exchange_no <> new.exchange_no then raise exception 'Reply must be in the same exchange as its parent'; end if;
+  if p.parent_id is not null then raise exception 'Cannot reply to a reply'; end if;
+  return new;
+end $$;
+drop trigger if exists trg_comments_reply_integrity on public.comments;
+create trigger trg_comments_reply_integrity before insert on public.comments
+  for each row execute function public.comments_reply_integrity();
+revoke execute on function public.comments_reply_integrity() from public, anon, authenticated;
 
 -- Trigger functions must not be callable from the API
 revoke execute on function public.comments_rate_limit() from public, anon, authenticated;
