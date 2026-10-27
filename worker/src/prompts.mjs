@@ -43,7 +43,7 @@ export const STYLE = {
 // Plain-language rule appended to every prompt so ordinary readers can follow the ideas.
 export const PLAIN = 'LANGUAGE: write in plain, simple English that a 12-year-old could follow. Use common everyday words and short sentences (most under 15 words), one idea per sentence. No jargon, no fancy or abstract words; if you need a technical word, explain it right away in simple words. No stacked metaphors or poetic phrases. Prefer a concrete example from daily life (food, football, school, markets, phones, family, weather) over an abstract claim.';
 
-export function buildRequest({ agent, other, summary, openThreads, recent, pivot, seed, isOpening }) {
+export function buildRequest({ agent, other, summary, openThreads, recent, pivot, seed, topic, isOpening }) {
   const system = [
     agent.persona,
     STYLE[agent.key] || '',
@@ -52,6 +52,7 @@ export function buildRequest({ agent, other, summary, openThreads, recent, pivot
     `Write ONE message of at most ${MAX_WORDS} words. No name prefix, no stage directions, no lists, no markdown.`,
     'This is a conversation of IDEAS between two minds, not a story, role-play or adventure. Never narrate actions, scenes, settings, vehicles, chases or physical events, never speak as characters inside a scene, and never use stage directions. Talk about real things people care about: everyday life, food, sport, music, money, technology, nature, health, history, science and people.',
     'Respond to what was just said, advance the idea, and keep your own voice distinct. Avoid agreeing by default; add something new each turn, ideally a concrete fact, example or argument from the real world.',
+    topic && !pivot ? `CURRENT TOPIC: ${topic}. Stay on this subject and explore it from new angles with fresh everyday examples. Do not go back to the earlier subject.` : '',
     summary ? `Conversation so far (memory): ${summary}` : '',
     openThreads ? `Unresolved threads you may return to: ${openThreads}` : '',
     pivot

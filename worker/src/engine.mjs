@@ -150,6 +150,9 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
     return raceAbort(withTimeout(Promise.resolve().then(() => provider.generate(req, { signal: s })), cfg.providerTimeoutMs, 'provider call'), s);
   }
 
+  const PIVOT_WINDOW = 12;
+  let activeSeed = null;
+
   // ---------- one turn ----------
   async function turn(agents, leaseSignal) {
     const signal = opSignal(leaseSignal);
@@ -177,6 +180,11 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
       }
     }
 
+    // After a topic change, keep the new subject in the prompt and hide the old-topic turns
+    // for PIVOT_WINDOW turns, otherwise the minds slide straight back to the previous subject.
+    const pivotUntil = Number(state.pivot_until_turn);
+    const inWindow = pivotUntil > 0 && turnNo <= pivotUntil;
+    const windowStart = pivotUntil - PIVOT_WINDOW;
     const cooled = turnNo > Number(state.pivot_until_turn);
     const drifting = cooled && (isRepetitive(recentFull) || isNarrative(recentFull));
     const pivot = forcePivotOnce || (cfg.pivotEvery > 0 && turnNo % cfg.pivotEvery === 0) || drifting;
@@ -184,12 +192,14 @@ export function createEngine({ pool, owner, config, makeProvider = defaultMakePr
     if (pivot) {
       await lease.fencedExec(
         `update engine.state s set pivot_until_turn=$1, summary='', open_threads=''
-         where ${fencePredicate('s', 2, 3)}`, [turnNo + 8], 'pivot update');
+         where ${fencePredicate('s', 2, 3)}`, [turnNo + PIVOT_WINDOW], 'pivot update');
       state.summary = ''; state.open_threads = '';
     }
 
     await setStatus('thinking', `${agent.name} is thinking`);
-    const req = buildRequest({ agent, other, summary: state.summary, openThreads: state.open_threads, recent: pivot ? recent.slice(-2) : recent, pivot, seed: pivot ? pickSeed() : null, isOpening: lastTurn === 0 });
+    if (pivot) activeSeed = pickSeed();
+    const windowed = inWindow && !pivot ? recentFull.filter((m) => Number(m.turn_no) >= windowStart) : null;
+    const req = buildRequest({ agent, other, summary: state.summary, openThreads: state.open_threads, recent: pivot ? recent.slice(-2) : (windowed && windowed.length ? windowed : recent), pivot, seed: pivot ? activeSeed : null, topic: (pivot || inWindow) ? activeSeed : null, isOpening: lastTurn === 0 });
     const raw = await generate(agents.providers[speakerKey], req, leaseSignal);
     const text = cleanOutput(raw, agent.name, other.name);
     if (!text) throw new Error('empty output after cleaning');

@@ -78,3 +78,14 @@ assert.equal(new Set(picked.map(groupOf)).size, 12, 'first 12 picks cover all 12
 assert.equal(new Set(picked).size, 12, 'no repeated seeds');
 assert.ok(MAX_WORDS <= 60);
 console.log('seed rotation + plain language ok');
+
+// 12. current-topic line appears after a pivot window, not on the pivot turn itself
+{
+  const ag = { key: 'explorer', name: 'The Explorer', persona: 'p' }, ot = { key: 'challenger', name: 'The Challenger' };
+  const r = [{ agent_key: 'challenger', content: 'hi' }];
+  const a = buildRequest({ agent: ag, other: ot, summary: '', openThreads: '', recent: r, pivot: false, seed: null, topic: 'why bread rises' });
+  assert.ok(/CURRENT TOPIC: why bread rises/.test(a.system));
+  const b = buildRequest({ agent: ag, other: ot, summary: '', openThreads: '', recent: r, pivot: true, seed: 'why bread rises', topic: 'why bread rises' });
+  assert.ok(!/CURRENT TOPIC/.test(b.system));
+  console.log('current topic line ok');
+}
