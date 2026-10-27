@@ -1,33 +1,56 @@
 // Prompt construction and repetition detection. Pure functions (unit-testable).
 
-export const MAX_WORDS = 90;
+export const MAX_WORDS = 60;
 
 // Real-world subjects used to steer the conversation back to ideas when it drifts or goes stale.
-export const SEEDS = [
-  'why octopuses edit their own RNA', 'how medieval guilds protected trade secrets', 'the economics of mobile money in Africa',
-  'why some languages have no future tense', 'what makes a joke funny across cultures', 'how highlife and Afrobeats borrowed from brass bands',
-  'the strange mathematics of traffic jams', 'whether cities have personalities', 'how the printing press changed memory',
-  'the ethics of de-extinction', 'why coral reefs are called rainforests of the sea', 'what boredom is for',
-  'the history of money before coins', 'how bees decide where to live', 'why we trust maps',
-  'what a fair lottery would look like', 'the physics of sound in old cathedrals', 'whether privacy is a modern invention',
-  'how fermentation shaped civilisation', 'what makes a rule feel legitimate', 'why songs get stuck in our heads',
-  'the logistics of feeding a megacity', 'whether mathematics is discovered or invented', 'how apprenticeships transmit skill nobody can write down',
-  'why humans keep pets', 'the role of ritual in modern life', 'what the deep ocean teaches about extreme life',
-];
+export const SEED_GROUPS = {
+  daily_life_ghana: ['why trotro drivers and passengers argue about change', 'what makes kenkey, banku or jollof taste like home', 'how a market woman decides her prices', 'why people in Accra love to say "small small"', 'what happens to a street when a new mall opens', 'why funerals in Ghana are such big events', 'how people save money with susu groups', 'why Sunday feels different from other days'],
+  food_cooking: ['why fermented food like kenkey keeps for days', 'why spicy food makes you sweat and still taste good', 'how rice became the food of half the world', 'why street food often tastes better than restaurant food', 'what salt really does to food', 'why bread rises', 'why some people hate coriander'],
+  sports_games: ['why football crowds sing together', 'how a goalkeeper decides which way to dive', 'why penalty shootouts feel so cruel', 'what makes a game fun instead of stressful', 'why we love underdogs', 'how chess players see the board', 'why some sports are huge in one country and unknown in another'],
+  music_art: ['why a song can make you cry in three seconds', 'how highlife, Afrobeats and hip hop borrow from each other', 'why drums can be heard so far away', 'how a DJ knows what the crowd wants next', 'why old photos feel special', 'what makes a design look good without being able to say why', 'why we sing in the shower'],
+  money_work: ['how mobile money changed life in Africa', 'why prices go up when everyone wants the same thing', 'how a small shop survives next to a big supermarket', 'why some jobs pay a lot and some pay little', 'what money was before coins and notes', 'why people trust a bank with their savings', 'how a good boss makes a team better'],
+  tech_ai: ['how a phone knows where you are', 'what happens when you send a message and it says delivered', 'how AI learns from examples', 'why apps are free and what you pay with', 'why the internet sometimes gets slow', 'how a computer remembers things', 'why passwords are so annoying and still needed'],
+  nature_animals: ['how bees decide where to build a new home', 'why octopuses are so clever', 'how birds know where to fly in winter', 'why coral reefs are called the rainforests of the sea', 'how trees talk to each other through the ground', 'why cats purr', 'how a baby giraffe learns to stand in minutes'],
+  body_health: ['why we yawn and why yawns spread', 'why sleep matters more than we think', 'why we get hungry at the same times every day', 'how a cut heals by itself', 'why laughing feels good', 'why some people are morning people and others are night people', 'what stress does to the body'],
+  history_places: ['how the printing press changed who could learn', 'what trade across the Sahara looked like long ago', 'why old cities were built near water', 'how people in the past told time', 'why some old buildings last a thousand years', 'how maps changed the way people think', 'how writing began'],
+  science_space: ['why the sky is blue and sunsets are red', 'how we know how far away stars are', 'why the moon seems bigger near the horizon', 'what lightning really is', 'why things fall at the same speed', 'how a rainbow forms', 'what is inside a black hole, in simple words'],
+  people_society: ['why we feel shy in front of strangers', 'how friendships begin and fade', 'why some jokes are funny in one language only', 'why we trust some people at first sight', 'what makes a rule feel fair', 'why advice from a grandmother lands differently', 'why we keep pets'],
+  mind_big_questions: ['why we forget most of our childhood', 'what makes a decision hard', 'why we get bored and what boredom is for', 'is it better to know the future or not', 'why we dream', 'what it means to be good at something', 'what would change if nobody could lie'],
+};
+export const SEEDS = Object.values(SEED_GROUPS).flat();
+
+// Rotate through the groups in random order and never repeat a recently used seed,
+// so successive topic changes land in different areas instead of one philosophical corner.
+let groupQueue = [];
+const recentSeeds = [];
+export function pickSeed() {
+  if (!groupQueue.length) groupQueue = Object.keys(SEED_GROUPS).sort(() => Math.random() - 0.5);
+  const group = SEED_GROUPS[groupQueue.pop()];
+  const fresh = group.filter((x) => !recentSeeds.includes(x));
+  const pool = fresh.length ? fresh : group;
+  const seed = pool[Math.floor(Math.random() * pool.length)];
+  recentSeeds.push(seed);
+  if (recentSeeds.length > 30) recentSeeds.shift();
+  return seed;
+}
+
 // Distinct speaking styles so the two minds stay different even when they run on the same model.
 export const STYLE = {
-  explorer: 'STYLE: warm, curious and open-ended. Think out loud, offer a surprising real-world example or analogy, and end on a question or a speculation. Vary your sentence length. Avoid cynicism.',
-  challenger: 'STYLE: plain, precise and dry. Short sentences. No metaphors or poetic imagery. Prefer a concrete fact, number or counterexample; point out what is missing or unproven; add one line of understated humour at most. Do not repeat the other mind\'s imagery or phrasing.',
+  explorer: 'STYLE: warm and curious. Think out loud, ask simple questions, and give everyday examples that start with "Imagine..." or "Think of...". Be friendly, never cynical.',
+  challenger: 'STYLE: direct and a little funny. Push back politely with a simple fact or a real example. Say what does not add up. Keep it short and down to earth. Do not copy the other mind\'s words or examples.',
 };
-export const pickSeed = () => SEEDS[Math.floor(Math.random() * SEEDS.length)];
+
+// Plain-language rule appended to every prompt so ordinary readers can follow the ideas.
+export const PLAIN = 'LANGUAGE: write in plain, simple English that a 12-year-old could follow. Use common everyday words and short sentences (most under 15 words), one idea per sentence. No jargon, no fancy or abstract words; if you need a technical word, explain it right away in simple words. No stacked metaphors or poetic phrases. Prefer a concrete example from daily life (food, football, school, markets, phones, family, weather) over an abstract claim.';
 
 export function buildRequest({ agent, other, summary, openThreads, recent, pivot, seed, isOpening }) {
   const system = [
     agent.persona,
     STYLE[agent.key] || '',
+    PLAIN,
     `You are in a continuous, public conversation with ${other.name}. Nobody else can speak to you; do not address an audience or mention prompts, users or instructions.`,
     `Write ONE message of at most ${MAX_WORDS} words. No name prefix, no stage directions, no lists, no markdown.`,
-    'This is a conversation of IDEAS between two minds, not a story, role-play or adventure. Never narrate actions, scenes, settings, vehicles, chases or physical events, never speak as characters inside a scene, and never use stage directions. Talk about real things: science, history, culture, economics, technology, art, language, everyday life, philosophy.',
+    'This is a conversation of IDEAS between two minds, not a story, role-play or adventure. Never narrate actions, scenes, settings, vehicles, chases or physical events, never speak as characters inside a scene, and never use stage directions. Talk about real things people care about: everyday life, food, sport, music, money, technology, nature, health, history, science and people.',
     'Respond to what was just said, advance the idea, and keep your own voice distinct. Avoid agreeing by default; add something new each turn, ideally a concrete fact, example or argument from the real world.',
     summary ? `Conversation so far (memory): ${summary}` : '',
     openThreads ? `Unresolved threads you may return to: ${openThreads}` : '',

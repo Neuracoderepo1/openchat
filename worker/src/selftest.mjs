@@ -1,6 +1,6 @@
 // Offline self-test for the pure logic (no database, no network).
 import assert from 'node:assert/strict';
-import { isRepetitive, similarity, cleanOutput, buildRequest, parseSummary, isNarrative, looksLikeLeak } from './prompts.mjs';
+import { isRepetitive, similarity, cleanOutput, buildRequest, parseSummary, isNarrative, looksLikeLeak, pickSeed, SEED_GROUPS, MAX_WORDS } from './prompts.mjs';
 import { makeProvider } from './providers.mjs';
 
 const mk = (n, a, c) => ({ turn_no: n, agent_key: a, content: c });
@@ -58,7 +58,8 @@ console.log('narrative detector ok');
 
 // 9. each agent gets its own style block
 const sx = buildRequest({ agent: { key: 'challenger', name: 'The Challenger', persona: 'p' }, other: { key: 'explorer', name: 'The Explorer' }, summary: '', openThreads: '', recent: [mk(1, 'explorer', 'hi')], pivot: false, isOpening: false });
-assert.ok(/plain, precise and dry/.test(sx.system) && !/warm, curious/.test(sx.system));
+assert.ok(/direct and a little funny/.test(sx.system) && !/warm and curious/.test(sx.system));
+assert.ok(/12-year-old/.test(sx.system), 'plain-language rule present');
 console.log('style ok');
 
 // 10. leaked reasoning is caught; normal replies pass
@@ -69,3 +70,11 @@ assert.equal(looksLikeLeak("Ramanujan did not calculate from divine fever; he us
 assert.equal(looksLikeLeak("Efficiency is a cul-de-sac. A perfectly optimized engine never swerves into the unknown."), false);
 for (const m of varied) assert.equal(looksLikeLeak(m.content), false);
 console.log('leak filter ok');
+
+// 11. seeds rotate across groups without immediate repeats; replies are kept short
+const groupOf = (x) => Object.keys(SEED_GROUPS).find((g) => SEED_GROUPS[g].includes(x));
+const picked = Array.from({ length: 12 }, () => pickSeed());
+assert.equal(new Set(picked.map(groupOf)).size, 12, 'first 12 picks cover all 12 groups');
+assert.equal(new Set(picked).size, 12, 'no repeated seeds');
+assert.ok(MAX_WORDS <= 60);
+console.log('seed rotation + plain language ok');

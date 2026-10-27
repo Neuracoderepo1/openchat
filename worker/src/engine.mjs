@@ -40,7 +40,7 @@ export function configFromEnv(env = process.env) {
     minTurnMs: Number(env.MIN_TURN_SECONDS ?? 3) * 1000,
     contextTurns: Number(env.CONTEXT_TURNS ?? 14),
     summaryEvery: Number(env.SUMMARY_EVERY ?? 20),
-    pivotEvery: Number(env.PIVOT_EVERY ?? 40),
+    pivotEvery: Number(env.PIVOT_EVERY ?? 24),
     leaseMs: Number(env.LEASE_MS ?? 90_000),
     maxBackoffMs: Number(env.MAX_BACKOFF_MINUTES ?? 10) * 60_000,
     dailyTurnCap: Number(env.DAILY_TURN_CAP ?? 0),   // turn-COUNT limit per rolling 24h; 0 = unlimited. Not a spend cap.
